@@ -1,4 +1,6 @@
 var fs = require("fs");
+var postJSON = require('fetch-json/post');
+var getJSON  = require('fetch-json/get');
 var Service, Characteristic, DoorState; // set in the module.exports, from homebridge
 
 module.exports = function(homebridge) {
@@ -6,31 +8,27 @@ module.exports = function(homebridge) {
   Characteristic = homebridge.hap.Characteristic;
   DoorState = homebridge.hap.Characteristic.CurrentDoorState;
 
-  homebridge.registerAccessory("homebridge-rasppi-gpio-garagedoor", "RaspPiGPIOGarageDoor", RaspPiGPIOGarageDoorAccessory);
+  homebridge.registerAccessory("homebridge-custom-garagedoor", "CustomGarageDoor", CustomGarageDoorAccessory);
 }
 
-function RaspPiGPIOGarageDoorAccessory(log, config) {
+function CustomGarageDoorAccessory(log, config) {
   this.log = log;
   this.name = config["name"];
-  this.doorSwitchPin = config["doorSwitchPin"];
-  this.doorSensorPin = config["doorSensorPin"];
-  this.doorPollInMs = config["doorPollInMs"];
+  this.url = config["url"];
   this.doorOpensInSeconds = config["doorOpensInSeconds"];
-  log("Door Switch Pin: " + this.doorSwitchPin);
-  log("Door Sensor Pin: " + this.doorSensorPin);
-  log("Door Poll in ms: " + this.doorPollInMs);
+  log("URL: " + this.url);
   log("Door Opens in seconds: " + this.doorOpensInSeconds);
   this.initService();
   setTimeout(this.monitorDoorState.bind(this), this.doorPollInMs);
 }
 
-RaspPiGPIOGarageDoorAccessory.prototype = {
+CustomGarageDoorAccessory.prototype = {
 
   monitorDoorState: function() {
      var isClosed = this.isClosed();
      if (isClosed != this.wasClosed) {
        this.wasClosed = isClosed;
-       var state = isClosed ? DoorState.CLOSED : DoorState.OPEN;       
+       var state = isClosed ? DoorState.CLOSED : DoorState.OPEN;
        this.log("Door state changed to " + (isClosed ? "CLOSED" : "OPEN"));
        if (!this.operating) {
          this.currentDoorState.setValue(state);
@@ -54,9 +52,9 @@ RaspPiGPIOGarageDoorAccessory.prototype = {
     this.infoService = new Service.AccessoryInformation();
     this.infoService
       .setCharacteristic(Characteristic.Manufacturer, "Opensource Community")
-      .setCharacteristic(Characteristic.Model, "RaspPi GPIO GarageDoor")
+      .setCharacteristic(Characteristic.Model, "Custom GarageDoor")
       .setCharacteristic(Characteristic.SerialNumber, "Version 1.0.0");
-  
+
     this.wasClosed = isClosed;
     this.operating = false;
     setTimeout(this.monitorDoorState.bind(this), this.doorPollInMs);
@@ -67,12 +65,9 @@ RaspPiGPIOGarageDoorAccessory.prototype = {
   },
 
   isClosed: function() {
-    return fs.readFileSync("/sys/class/gpio/gpio"+this.doorSensorPin+"/value", "utf8").trim() == "1";
-  },
-
-  switchOff: function() {
-    fs.writeFileSync("/sys/class/gpio/gpio"+this.doorSwitchPin+"/value", "0");
-    this.log("Turning off GarageDoor Relay");
+    return getJSON(this.url + '/status.json').then(function(data) {
+      return data.garage_door == 'closed';
+    });
   },
 
   setFinalDoorState: function() {
@@ -93,15 +88,14 @@ RaspPiGPIOGarageDoorAccessory.prototype = {
     var isClosed = this.isClosed();
     if ((state == DoorState.OPEN && isClosed) || (state == DoorState.CLOSED && !isClosed)) {
         this.log("Triggering GarageDoor Relay");
-        this.operating = true; 
+        this.operating = true;
         if (state == DoorState.OPEN) {
             this.currentDoorState.setValue(DoorState.OPENING);
         } else {
             this.currentDoorState.setValue(DoorState.CLOSING);
         }
         setTimeout(this.setFinalDoorState.bind(this), this.doorOpensInSeconds * 1000);
-        fs.writeFileSync("/sys/class/gpio/gpio"+this.doorSwitchPin+"/value", "1");
-        setTimeout(this.switchOff.bind(this), 1000);
+        postJSON(this.url + '/toggle')
     }
 
     callback();
@@ -110,7 +104,7 @@ RaspPiGPIOGarageDoorAccessory.prototype = {
 
   getState: function(callback) {
     var isClosed = this.isClosed();
-    this.log("GarageDoor is " + (isClosed ? "CLOSED ("+DoorState.CLOSED+")" : "OPEN ("+DoorState.OPEN+")")); 
+    this.log("GarageDoor is " + (isClosed ? "CLOSED ("+DoorState.CLOSED+")" : "OPEN ("+DoorState.OPEN+")"));
     callback(null, (isClosed ? DoorState.CLOSED : DoorState.OPEN));
   },
 
